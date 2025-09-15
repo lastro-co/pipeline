@@ -8,11 +8,9 @@ import (
 )
 
 // Step represents a single transformation over a value of type T.
-// It returns the transformed value or an error. If an error occurs,
-type Step[T any] func(T) (T, error)
-
-// Same as Step, but with context support.
-type ContextStep[T any] func(context.Context, T) (T, error)
+// It returns the transformed value or an error and receives a context.
+// If an error occurs or context is cancelled, execution stops.
+type Step[T any] func(context.Context, T) (T, error)
 
 // StepFunc defines the constraint for valid step function types
 type StepFunc[T any] interface {
@@ -24,7 +22,7 @@ type StepFunc[T any] interface {
 // Execute/ExecuteWithContext to run them.
 type Pipeline[T any] struct {
 	value T
-	steps []ContextStep[T]
+	steps []Step[T]
 }
 
 // New creates a new Pipeline with an initial value.
@@ -32,21 +30,21 @@ func New[T any](initial T) *Pipeline[T] {
 	return &Pipeline[T]{value: initial}
 }
 
-// Do appends a context-aware step to the pipeline. For other function types,
+// Do appends a step to the pipeline. For other function types,
 // use the helper function ToStep to convert them.
-func (p *Pipeline[T]) Do(step ContextStep[T]) *Pipeline[T] {
+func (p *Pipeline[T]) Do(step Step[T]) *Pipeline[T] {
 	p.steps = append(p.steps, step)
 	return p
 }
 
-// ToStep converts various function types to ContextStep[T] for use with Do.
+// ToStep converts various function types to Step[T] for use with Do.
 // It accepts functions of type:
 // - func(T) T: Functions that never return an error
 // - func(T) (T, error): Functions that may return an error
 // - func(context.Context, T) T: Context-aware functions that never return an error
 // - func(context.Context, T) (T, error): Functions that are already context-aware
-func ToStep[T any, F StepFunc[T]](f F) ContextStep[T] {
-	var step ContextStep[T]
+func ToStep[T any, F StepFunc[T]](f F) Step[T] {
+	var step Step[T]
 
 	switch s := any(f).(type) {
 	case func(T) T:
