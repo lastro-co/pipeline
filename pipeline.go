@@ -5,6 +5,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 )
 
 // Step represents a single transformation over a value of type T.
@@ -15,6 +16,22 @@ type Step[T any] func(context.Context, T) (T, error)
 // StepFunc defines the constraint for valid step function types
 type StepFunc[T any] interface {
 	~func(T) (T, error) | ~func(context.Context, T) (T, error) | ~func(T) T | ~func(context.Context, T) T
+}
+
+// PipelineError wraps errors that occur during pipeline execution with additional context.
+type PipelineError struct {
+	StepIndex   int
+	TotalSteps  int
+	OriginalErr error
+	LastValue   any
+}
+
+func (e *PipelineError) Error() string {
+	return fmt.Sprintf("pipeline failed at step %d/%d: %v", e.StepIndex, e.TotalSteps, e.OriginalErr)
+}
+
+func (e *PipelineError) Unwrap() error {
+	return e.OriginalErr
 }
 
 // Pipeline holds a value of type T and a list of steps to apply to it.
@@ -78,17 +95,28 @@ func (p *Pipeline[T]) Execute() (T, error) {
 // first error or if the context is cancelled.
 func (p *Pipeline[T]) ExecuteWithContext(ctx context.Context) (T, error) {
 	current := p.value
+	totalSteps := len(p.steps)
 
-	for _, step := range p.steps {
+	for i, step := range p.steps {
 		select {
 		case <-ctx.Done():
-			return current, ctx.Err()
+			return current, &PipelineError{
+				StepIndex:   i,
+				TotalSteps:  totalSteps,
+				OriginalErr: ctx.Err(),
+				LastValue:   current,
+			}
 		default:
 		}
 
 		next, err := step(ctx, current)
 		if err != nil {
-			return current, err
+			return current, &PipelineError{
+				StepIndex:   i,
+				TotalSteps:  totalSteps,
+				OriginalErr: err,
+				LastValue:   current,
+			}
 		}
 		current = next
 	}
