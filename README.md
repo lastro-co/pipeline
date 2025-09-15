@@ -250,3 +250,73 @@ _, err := pipeline.
 //     LastValue:   "TEST",                             // the last value processed before the error
 // }
 ```
+
+### Step-Specific Error Handling
+
+Use custom error types to identify which step failed and handle errors differently:
+
+```go
+import "errors"
+
+// Custom error types for different steps
+type ValidationError struct {
+    Field   string
+    Message string
+}
+
+func (e ValidationError) Error() string {
+    return fmt.Sprintf("validation failed for %s: %s", e.Field, e.Message)
+}
+
+type ProcessingError struct {
+    Operation string
+    Cause     error
+}
+
+func (e ProcessingError) Error() string {
+    return fmt.Sprintf("processing failed during %s: %v", e.Operation, e.Cause)
+}
+
+// Steps that return custom errors
+validateData := func(ctx context.Context, data string) (string, error) {
+    if len(data) < 3 {
+        return "", ValidationError{Field: "data", Message: "too short"}
+    }
+    return data, nil
+}
+
+processData := func(ctx context.Context, data string) (string, error) {
+    if strings.Contains(data, "error") {
+        return "", ProcessingError{Operation: "transform", Cause: fmt.Errorf("invalid content")}
+    }
+    return strings.ToUpper(data), nil
+}
+
+// Execute pipeline and handle specific errors
+result, err := pipeline.New("hi").
+    Do(validateData).
+    Do(processData).
+    Execute()
+
+if err != nil {
+    var pipeErr *pipeline.PipelineError
+    if errors.As(err, &pipeErr) {
+        // Check the underlying error type
+        var validationErr ValidationError
+        var processingErr ProcessingError
+
+        switch {
+        case errors.As(pipeErr.OriginalErr, &validationErr):
+            fmt.Printf("Validation failed at step %d: %s\n", pipeErr.StepIndex+1, validationErr.Message)
+            // Handle validation errors - maybe retry with different input
+
+        case errors.As(pipeErr.OriginalErr, &processingErr):
+            fmt.Printf("Processing failed at step %d during %s\n", pipeErr.StepIndex+1, processingErr.Operation)
+            // Handle processing errors - maybe use fallback processing
+
+        default:
+            fmt.Printf("Unknown error at step %d: %v\n", pipeErr.StepIndex+1, pipeErr.OriginalErr)
+        }
+    }
+}
+```
