@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lastro-co/development-kit/pipeline"
+	"github.com/lastro-co/pipeline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

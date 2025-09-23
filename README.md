@@ -67,7 +67,7 @@ import (
     "context"
     "fmt"
     "strings"
-    "github.com/lastro-co/development-kit/pipeline"
+    "github.com/lastro-co/pipeline"
 )
 
 // Step functions that match the Step[T] signature
