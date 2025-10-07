@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lastro-co/pipeline"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/lastro-co/pipeline"
 )
 
 func TestPipeline(t *testing.T) {
@@ -57,6 +58,38 @@ func TestPipeline(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, initial, result)
+	})
+}
+
+func TestToStep(t *testing.T) {
+	t.Run("converts func(context.Context, T) (T, error) directly", func(t *testing.T) {
+		// This test covers the case where ToStep receives a func(context.Context, T) (T, error)
+		// and assigns it directly to step (line 80: step = s)
+		contextStepWithError := func(ctx context.Context, str string) (string, error) {
+			if str == "error" {
+				return "", errors.New("test error")
+			}
+			return str + "-context", nil
+		}
+
+		// Test successful case
+		result, err := pipeline.
+			New("hello").
+			Do(pipeline.ToStep[string](contextStepWithError)).
+			Execute()
+
+		require.NoError(t, err)
+		assert.Equal(t, "hello-context", result)
+
+		// Test error case
+		result, err = pipeline.
+			New("error").
+			Do(pipeline.ToStep[string](contextStepWithError)).
+			Execute()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "test error")
+		assert.Equal(t, "error", result)
 	})
 }
 
@@ -126,5 +159,35 @@ func TestContext(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("context cancelled during pipeline execution", func(t *testing.T) {
+		step1 := func(ctx context.Context, str string) (string, error) {
+			return str + "-step1", nil
+		}
+
+		step2 := func(ctx context.Context, str string) (string, error) {
+			// This step should not execute due to context cancellation
+			return str + "-step2", nil
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		result, err := pipeline.
+			New("test").
+			Do(step1).
+			Do(step2).
+			ExecuteWithContext(ctx)
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, "test", result) // Should return initial value when cancelled
+
+		var pipelineErr *pipeline.PipelineError
+		require.ErrorAs(t, err, &pipelineErr)
+		assert.Equal(t, 0, pipelineErr.StepIndex)
+		assert.Equal(t, 2, pipelineErr.TotalSteps)
+		assert.Equal(t, "test", pipelineErr.LastValue)
 	})
 }
