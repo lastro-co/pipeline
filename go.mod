@@ -2,6 +2,8 @@ module github.com/lastro-co/pipeline
 
 go 1.23.0
 
+toolchain go1.27.3
+
 require github.com/stretchr/testify v1.11.1
 
 require (
