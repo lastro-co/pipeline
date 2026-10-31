@@ -1,0 +1,107 @@
+# Varredura de segurança (PLAT-1099): gitleaks nos commits novos, em todo push
+# (inclusive na base) e uma vez por semana. O relatório vai para o DefectDojo.
+#
+# Cópia do job "secrets" de lastro-co/eks-gitops/.github/workflows/security-scan.yml:
+# repo público não pode chamar workflow de repo internal. Mudou lá, copiar aqui.
+# Runner hospedado pelo GitHub: runner self-hosted não roda código de repo público.
+name: Security scan
+
+on:
+  push:
+  schedule:
+    - cron: "1 11 * * 1"
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  # sha256 do gitleaks_<versão>_linux_x64.tar.gz, conferido contra o
+  # checksums.txt da release. Trocar os dois juntos.
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  # Relatórios lidos pelo importer do DefectDojo a cada 30 min; não precisam durar.
+  REPORT_RETENTION_DAYS: "7"
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/gitleaks.tgz" "$url"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+
+      # Só os commits que a branch traz: o histórico antigo é tratado à parte
+      # (varredura completa registrada no PLAT-1099), senão todo PR herdaria
+      # achados de anos atrás.
+      - name: Resolve commit range
+        id: range
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          REF_NAME: ${{ github.ref_name }}
+          CANDIDATES: master main prod
+        run: |
+          set -euo pipefail
+          range=""
+          if [ "$EVENT_NAME" = pull_request ]; then
+            range="${PR_BASE_SHA}..HEAD"
+          else
+            set -f
+            is_base=false
+            for c in $CANDIDATES; do [ "$c" = "$REF_NAME" ] && is_base=true; done
+            if [ "$is_base" = true ] && [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != 0000000000000000000000000000000000000000 ]; then
+              # Push na própria base: só o que entrou neste push.
+              range="${PUSH_BEFORE}..HEAD"
+            else
+              # Branch de trabalho: tudo desde a base mais próxima.
+              best=""; best_n=""
+              for c in $CANDIDATES; do
+                git rev-parse --verify --quiet "refs/remotes/origin/$c" >/dev/null || continue
+                mb=$(git merge-base HEAD "origin/$c") || continue
+                n=$(git rev-list --count "$mb..HEAD")
+                if [ -z "$best_n" ] || [ "$n" -lt "$best_n" ]; then best="$mb"; best_n="$n"; fi
+              done
+              # Sem base conhecida, varre o histórico inteiro: olhar só o HEAD
+              # deixaria os outros commits da branch de fora.
+              if [ -n "$best" ]; then range="${best}..HEAD"; else range=""; fi
+            fi
+          fi
+          echo "Range: ${range:-histórico inteiro}"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+
+      - name: Run gitleaks
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/report"
+          args=(git . --no-banner --redact --exit-code 1
+            --report-format json --report-path "$RUNNER_TEMP/report/gitleaks.json")
+          if [ -n "$RANGE" ]; then args+=(--log-opts="$RANGE"); fi
+          "$RUNNER_TEMP/gitleaks" "${args[@]}"
+
+      # Também quando o gitleaks achou algo (é quando o relatório importa). --redact
+      # troca o segredo por REDACTED no JSON.
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-scan-gitleaks
+          path: ${{ runner.temp }}/report/gitleaks.json
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+          if-no-files-found: ignore
