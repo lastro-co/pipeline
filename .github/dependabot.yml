@@ -1,0 +1,22 @@
+# Mantém atualizados os SHAs das Actions de terceiros.
+#
+# Com as Actions fixadas por SHA, a tag deixa de puxar correção sozinha. O
+# Dependabot abre um PR semanal com todas as atualizações, já com o SHA novo e o
+# comentário de versão.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+    schedule:
+      interval: weekly
+    # Espera 7 dias antes de propor uma release nova. Release maliciosa costuma
+    # ser detectada e retirada nesse intervalo.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"
